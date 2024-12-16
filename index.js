@@ -1,9 +1,11 @@
 import express from "express";
 import bodyParser from "body-parser";
 import pg from "pg";
+import bcrypt, { getRounds } from "bcrypt"
 
 const app = express();
 const port = 3000;
+const saltRounds = 10;
 
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static("public"));
@@ -36,13 +38,18 @@ app.post("/register", async (req, res) => {
   try {
     // check user exists
     const user = await getUser(email);
-    console.log('user', user);
     if (user) { 
       res.send("This email already exists. Try logging in!");
     }else{
       // register user
-      await db.query("INSERT INTO users (email, password) VALUES ($1, $2)", [email, password]);
-      res.redirect("/login")
+      bcrypt.hash(password, saltRounds, async (err, passHashed) => {
+        if (err) {
+          res.send("Error hashing password: ", err);
+        } else {
+          await db.query("INSERT INTO users (email, password) VALUES ($1, $2)", [email, passHashed]);
+          res.redirect("/login")
+        }
+      });
     }
   } catch (error) {
     console.error('register:', error);
@@ -55,13 +62,18 @@ app.post("/login", async (req, res) => {
 
   try {
     // check user exists
-    const user = await getUser(email, password);
-    console.log('user', user);
+    const user = await getUser(email);
     
     if (!user) {
-      res.send("Wrong email or password! Please try again!!!")
+      res.send("Wrong email ! Please try again!!!")
     } else {
-      res.render("secrets.ejs")
+      bcrypt.compare(password, user.password, (err, result) =>{
+        if (!result) {
+          res.send("Wrong password!");
+        } else {
+          res.render("secrets.ejs")
+        }
+      });
     }
   } catch (error) {
     console.error('login:', error);
@@ -69,16 +81,12 @@ app.post("/login", async (req, res) => {
   }
 });
 
-async function getUser(email, password = null) {
-  let user;
-  if (password) {
-    const result = await db.query("select * from users where email=$1 and password=$2", [email, password]);    
-    user = result.rows[0] ?? null;
-  } else {
-    const result = await db.query("select * from users where email=$1", [email]);
-    user = result.rows[0] ?? null;
-  }
-  return user;
+async function getUser(email) {
+  const result = await db.query("select * from users where email=$1", [email]);
+  let user = result.rows[0];
+  console.log("user", user);
+  
+  return user ?? null;
 }
 
 app.listen(port, () => {
