@@ -1,7 +1,10 @@
 import express from "express";
 import bodyParser from "body-parser";
 import pg from "pg";
-import bcrypt, { getRounds } from "bcrypt"
+import bcrypt from "bcrypt";
+import session from "express-session";
+import passport from "passport";
+import { Strategy } from "passport-local";
 
 const app = express();
 const port = 3000;
@@ -10,9 +13,20 @@ const saltRounds = 10;
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
+app.use(
+  session({
+    secret: "TOPSECRETWORD",
+    resave: false,
+    saveUninitialized: true
+  })
+);
+
+app.use(passport.initialize());
+app.use(passport.session());
+
 const db = new pg.Client({
   user: "postgres",
-  host : "localhost",
+  host: "localhost",
   port: 5432,
   password: "123456",
   database: "secrets"
@@ -31,63 +45,93 @@ app.get("/register", (req, res) => {
   res.render("register.ejs");
 });
 
+app.get("/secrets", (req, res) => {
+  if (req.isAuthenticated()) {
+    res.render("secrets.ejs");
+  } else {
+    res.redirect("/login");
+  }
+});
+
 app.post("/register", async (req, res) => {
   const email = req.body.username;
   const password = req.body.password;
-  
+
   try {
     // check user exists
     const user = await getUser(email);
-    if (user) { 
+    if (user) {
       res.send("This email already exists. Try logging in!");
-    }else{
+    } else {
       // register user
       bcrypt.hash(password, saltRounds, async (err, passHashed) => {
         if (err) {
           res.send("Error hashing password: ", err);
         } else {
-          await db.query("INSERT INTO users (email, password) VALUES ($1, $2)", [email, passHashed]);
-          res.redirect("/login")
+          await db.query(
+            "INSERT INTO users (email, password) VALUES ($1, $2)",
+            [email, passHashed]
+          );
+          res.redirect("/login");
         }
       });
     }
   } catch (error) {
-    console.error('register:', error);
+    console.error("register:", error);
   }
 });
 
-app.post("/login", async (req, res) => {
-  const email = req.body.username;
-  const password = req.body.password;
-
-  try {
-    // check user exists
-    const user = await getUser(email);
-    
-    if (!user) {
-      res.send("Wrong email ! Please try again!!!")
-    } else {
-      bcrypt.compare(password, user.password, (err, result) =>{
-        if (!result) {
-          res.send("Wrong password!");
-        } else {
-          res.render("secrets.ejs")
-        }
-      });
-    }
-  } catch (error) {
-    console.error('login:', error);
-    
-  }
-});
+app.post(
+  "/login",
+  passport.authenticate("local", {
+    successRedirect: "/secrets",
+    failureRedirect: "/login"
+  })
+);
 
 async function getUser(email) {
   const result = await db.query("select * from users where email=$1", [email]);
   let user = result.rows[0];
   console.log("user", user);
-  
-  return user ?? null;
+
+  return user ? user : null;
 }
+
+passport.use(
+  new Strategy(async function verify(username, password, cb) {
+    const email = username;
+    try {
+      // check user exists
+      const user = await getUser(email);
+
+      if (!user) {
+        return cb("User not found!");
+      } else {
+        bcrypt.compare(password, user.password, (err, result) => {
+          if (err) {
+            return cb(err);
+          } else {
+            if (!result) {
+              return cb(err, false);
+            } else {
+              return cb(err, user);
+            }
+          }
+        });
+      }
+    } catch (error) {
+      return cb(error);
+    }
+  })
+);
+
+passport.serializeUser((user, cb) => {
+  cb(null, user);
+});
+
+passport.deserializeUser((user, cb) => {
+  cb(null, user);
+});
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
