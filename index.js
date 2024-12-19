@@ -5,6 +5,7 @@ import bcrypt from "bcrypt";
 import session from "express-session";
 import passport from "passport";
 import { Strategy } from "passport-local";
+import GoogleStrategy from "passport-google-oauth2";
 import env from "dotenv";
 
 const app = express();
@@ -21,7 +22,7 @@ app.use(
     resave: false,
     saveUninitialized: true,
     cookie: {
-      maxAge: 1000 * 60 * 60 * 24  // 1 day
+      maxAge: 1000 * 60 * 60 * 24 // 1 day
     }
   })
 );
@@ -30,11 +31,11 @@ app.use(passport.initialize());
 app.use(passport.session());
 
 const db = new pg.Client({
-  user:process.env.PG_USER,
-  host:process.env.PG_HOST,
-  port:process.env.PG_PORT,
-  password:process.env.PG_PASSWORD,
-  database:process.env.PG_DATABASE
+  user: process.env.PG_USER,
+  host: process.env.PG_HOST,
+  port: process.env.PG_PORT,
+  password: process.env.PG_PASSWORD,
+  database: process.env.PG_DATABASE
 });
 db.connect();
 
@@ -56,6 +57,27 @@ app.get("/secrets", (req, res) => {
   } else {
     res.redirect("/login");
   }
+});
+
+app.get(
+  "/auth/google",
+  passport.authenticate("google", {
+    scope: ["email", "profile"]
+  })
+);
+
+app.get(
+  "/auth/google/secrets",
+  passport.authenticate("google", {
+    successRedirect: "/secrets",
+    failureRedirect: "/login"
+  })
+);
+
+app.get("/logout", (req, res) => {
+  req.logout(err => {
+    err ? console.log("logout", err) : res.redirect("/login");
+  });
 });
 
 app.post("/register", async (req, res) => {
@@ -103,6 +125,7 @@ async function getUser(email) {
 }
 
 passport.use(
+  "local",
   new Strategy(async function verify(username, password, cb) {
     const email = username;
     try {
@@ -128,6 +151,40 @@ passport.use(
       return cb(error);
     }
   })
+);
+
+passport.use(
+  "google",
+  new GoogleStrategy(
+    {
+      clientID: process.env.GOOGLE_CLIENT_ID,
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      callbackURL: "http://localhost:3000/auth/google/secrets",
+      userProfileURL: "https://www.googleapis.com/oauth2/v3/userinfo"
+    },
+    async (accessToken, refreshToken, profile, cb) => {
+      console.log("register", profile);
+      try {
+        const user = await getUser(profile.email);
+
+        if (user) {
+          // user already exist
+          cb(null, user);
+        } else {
+          // new user
+          const q = await db.query(
+            "INSERT INTO users (email, password) VALUES ($1, $2) returning *",
+            [profile.email, "google"]
+          );
+
+          const newUser = q.rows[0];
+          cb(null, newUser);
+        }
+      } catch (error) {
+        cb(error);
+      }
+    }
+  )
 );
 
 passport.serializeUser((user, cb) => {
